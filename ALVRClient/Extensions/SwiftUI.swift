@@ -6,6 +6,18 @@ import SwiftUI
 import CompositorServices
 
 extension Scene {
+  func disableRestorationForVisionOS26() -> some Scene {
+#if XCODE_BETA_26
+    if #available(visionOS 26.0, *) {
+      return self.restorationBehavior(.disabled)
+    } else {
+      return self
+    }
+#else
+    return self
+#endif
+  }
+
   func disablePersistentSystemOverlaysForVisionOS2(shouldDisable: Visibility) -> some Scene {
 #if XCODE_BETA_16
     if #available(visionOS 2.0, *) {
