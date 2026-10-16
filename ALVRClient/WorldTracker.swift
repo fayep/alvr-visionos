@@ -3706,8 +3706,19 @@ final class ControllerFocus: ObservableObject {
     /// Whether the stream is on screen; the lobby gets no controller input either. The Metal
     /// render loop only pauses when the space is left, so it counts frames actually drawn.
     var realityKitShown = false
-    var windowShown = false
     private var lastMetalFrame = 0.0
+    private var watch: Timer?
+
+    init() {
+        // Input is only judged while the input loop runs; once the stream is gone, nothing is lost.
+        // On the main run loop, whichever thread first touches this.
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self, self.lost, !self.immersive else { return }
+            self.lost = false
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        watch = timer
+    }
     var immersive: Bool { realityKitShown || CACurrentMediaTime() - lastMetalFrame < 0.5 }
 
     func metalFrameDrawn() {
