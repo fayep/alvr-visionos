@@ -2090,7 +2090,10 @@ class WorldTracker {
         var sawPsvr = false
         var sawPsvrInput = false
         defer {
-            ControllerFocus.shared.update(sawController: sawPsvr && !controllersAreDisabledByClickTogether,
+            // Without focus, GameController may stop listing the controllers at all, while ARKit
+            // still tracks them, so a tracked controller counts as present too.
+            let tracked = leftControllerPose != nil || rightControllerPose != nil
+            ControllerFocus.shared.update(sawController: (sawPsvr || tracked) && !controllersAreDisabledByClickTogether,
                                           sawInput: sawPsvrInput, streaming: EventHandler.shared.streamingActive,
                                           poses: [leftControllerPose, rightControllerPose])
         }
