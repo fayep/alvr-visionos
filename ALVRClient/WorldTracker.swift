@@ -3703,8 +3703,15 @@ class WorldTracker {
 final class ControllerFocus: ObservableObject {
     static let shared = ControllerFocus()
     @Published private(set) var lost = false
-    /// Set while the stream is on screen; the lobby gets no controller input either.
-    var immersive = false
+    /// Whether the stream is on screen; the lobby gets no controller input either. The Metal
+    /// render loop only pauses when the space is left, so it counts frames actually drawn.
+    var realityKitShown = false
+    private var lastMetalFrame = 0.0
+    var immersive: Bool { realityKitShown || CACurrentMediaTime() - lastMetalFrame < 0.5 }
+
+    func metalFrameDrawn() {
+        lastMetalFrame = CACurrentMediaTime()
+    }
     private var lastInput = CACurrentMediaTime()
     private var silentPoses: [simd_float4x4?] = []
     private var movedWhileSilent = false
