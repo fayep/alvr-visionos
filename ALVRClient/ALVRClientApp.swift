@@ -253,13 +253,17 @@ struct ALVRClientApp: App {
             ControllerRecoveryView()
         }
         .windowResizability(.contentSize)
+        .placeAsUtilityPanelForVisionOS2()
         // Left open when the app quit, visionOS would bring it back in place of the lobby.
         .disableRestorationForVisionOS26()
     }
 
     private func showControllerRecovery(_ lost: Bool) {
-        if lost {
+        // A WindowGroup opens another window every time; one is enough. (Window is visionOS 26.)
+        if lost && !ControllerFocus.shared.windowShown {
             openWindow(id: "ControllerRecovery")
+        } else if lost {
+            return
         } else {
             dismissWindow(id: "ControllerRecovery")
         }
@@ -283,7 +287,9 @@ struct ControllerRecoveryView: View {
         }
         .padding(28)
         .handlesGameControllerEvents(matching: .gamepad)
+        .onDisappear { ControllerFocus.shared.windowShown = false }
         .onAppear {
+            ControllerFocus.shared.windowShown = true
             // Only wanted over the stream, while the input is gone.
             if !ControllerFocus.shared.lost || !ControllerFocus.shared.immersive {
                 close()

@@ -3706,6 +3706,7 @@ final class ControllerFocus: ObservableObject {
     /// Whether the stream is on screen; the lobby gets no controller input either. The Metal
     /// render loop only pauses when the space is left, so it counts frames actually drawn.
     var realityKitShown = false
+    var windowShown = false
     private var lastMetalFrame = 0.0
     var immersive: Bool { realityKitShown || CACurrentMediaTime() - lastMetalFrame < 0.5 }
 
