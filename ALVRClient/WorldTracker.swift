@@ -257,6 +257,10 @@ class WorldTracker {
     var planeCache: [UUID: CachedPlaneData] = [:]
     var worldAnchors: [UUID: WorldAnchor] = [:]
     var worldAnchorsToRemove: [WorldAnchor] = []
+    // initializeAr() runs again whenever controllers or styli come and go, and each run starts
+    // another processWorldTrackingUpdates() while the last may still be going, so both
+    // collections are written from more than one task at once.
+    private let worldAnchorsLock = NSLock()
     var worldTrackingAddedOriginAnchor = false
     var worldTrackingSteamVRTransform: simd_float4x4 = matrix_identity_float4x4
     var worldOriginAnchor: WorldAnchor? = nil
@@ -694,7 +698,7 @@ class WorldTracker {
             
             switch update.event {
             case .added, .updated:
-                worldAnchors[update.anchor.id] = update.anchor
+                worldAnchorsLock.withLock { worldAnchors[update.anchor.id] = update.anchor }
                 if !self.worldTrackingAddedOriginAnchor && keepSteamVRCenter && (worldOriginAnchor == nil || update.anchor.id != worldOriginAnchor!.id) {
                     print("Early origin anchor?", anchorDistanceFromOrigin(anchor: update.anchor), "Current Origin,", self.worldOriginAnchor?.id)
                     
@@ -706,7 +710,7 @@ class WorldTracker {
                         // though which anchor gets chosen will be arbitrary.
                         // But there should only be one anyway.
                         if let anchor = self.worldOriginAnchor {
-                            worldAnchorsToRemove.append(anchor)
+                            worldAnchorsLock.withLock { worldAnchorsToRemove.append(anchor) }
                         }
                         
                         // HACK: try and restore updates?
@@ -717,7 +721,7 @@ class WorldTracker {
                     if worldOriginAnchor != nil && update.anchor.id != worldOriginAnchor!.id {
                         if anchorDistanceFromAnchor(anchorA: update.anchor, anchorB: worldOriginAnchor!) <= 3.5 && update.anchor.isTracked {
                             print("Removed anchor for being too close:", update.anchor.id)
-                            worldAnchorsToRemove.append( update.anchor)
+                            worldAnchorsLock.withLock { worldAnchorsToRemove.append(update.anchor) }
                         }
                     }
                 }
@@ -758,9 +762,11 @@ class WorldTracker {
                             print("Reset world origin!")
                             
                             // Purge all existing world anchors within 3.5m
-                            for anchorPurge in worldAnchors {
-                                if anchorDistanceFromOrigin(anchor: update.anchor) < 3.5 {
-                                    worldAnchorsToRemove.append(anchorPurge.value)
+                            worldAnchorsLock.withLock {
+                                for anchorPurge in worldAnchors {
+                                    if anchorDistanceFromOrigin(anchor: update.anchor) < 3.5 {
+                                        worldAnchorsToRemove.append(anchorPurge.value)
+                                    }
                                 }
                             }
                     
@@ -2550,17 +2556,22 @@ class WorldTracker {
             handGesturesEnabled = false
         }
         
-        Task {
-            for anchor in worldAnchorsToRemove {
-                do {
-                    try await worldTracking.removeAnchor(anchor)
+        let toRemove: [WorldAnchor] = worldAnchorsLock.withLock {
+            defer { worldAnchorsToRemove.removeAll() }
+            return worldAnchorsToRemove
+        }
+        if !toRemove.isEmpty {
+            Task {
+                for anchor in toRemove {
+                    do {
+                        try await worldTracking.removeAnchor(anchor)
+                    }
+                    catch {
+                        // don't care
+                    }
+                    _ = worldAnchorsLock.withLock { worldAnchors.removeValue(forKey: anchor.id) }
                 }
-                catch {
-                    // don't care
-                }
-                worldAnchors.removeValue(forKey: anchor.id)
             }
-            worldAnchorsToRemove.removeAll()
         }
         
         // Predict as far into the future as Apple will allow us.
