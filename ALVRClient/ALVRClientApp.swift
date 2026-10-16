@@ -249,7 +249,9 @@ struct ALVRClientApp: App {
         .immersionStyle(selection: $clientImmersionStyle, in: .mixed, .full)
         .upperLimbVisibility(ALVRClientApp.gStore.settings.showHandsOverlaid ? .visible : .hidden)
 
-        WindowGroup(id: "ControllerRecovery") {
+        // Opened with one fixed value, so SwiftUI brings that one window forward rather than opening
+        // another. (A Window scene would do it too, but only from visionOS 26.)
+        WindowGroup(id: "ControllerRecovery", for: String.self) { _ in
             ControllerRecoveryView()
         }
         .windowResizability(.contentSize)
@@ -259,13 +261,10 @@ struct ALVRClientApp: App {
     }
 
     private func showControllerRecovery(_ lost: Bool) {
-        // A WindowGroup opens another window every time; one is enough. (Window is visionOS 26.)
-        if lost && !ControllerFocus.shared.windowShown {
-            openWindow(id: "ControllerRecovery")
-        } else if lost {
-            return
+        if lost && ControllerFocus.shared.immersive {
+            openWindow(id: "ControllerRecovery", value: ControllerRecoveryView.value)
         } else {
-            dismissWindow(id: "ControllerRecovery")
+            dismissWindow(id: "ControllerRecovery", value: ControllerRecoveryView.value)
         }
     }
 }
@@ -274,6 +273,7 @@ struct ALVRClientApp: App {
 /// Opening it is what hands them back: the app has focus again, and the window closes itself
 /// once input returns.
 struct ControllerRecoveryView: View {
+    static let value = "controllers"
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.openWindow) private var openWindow
 
@@ -287,12 +287,15 @@ struct ControllerRecoveryView: View {
         }
         .padding(28)
         .handlesGameControllerEvents(matching: .gamepad)
-        .onDisappear { ControllerFocus.shared.windowShown = false }
-        .onAppear {
-            ControllerFocus.shared.windowShown = true
-            // Only wanted over the stream, while the input is gone.
-            if !ControllerFocus.shared.lost || !ControllerFocus.shared.immersive {
-                close()
+        .task {
+            // Only wanted over the stream, while the input is gone; the stream can end, or the input
+            // come back, without anything else noticing.
+            while !Task.isCancelled {
+                if !ControllerFocus.shared.lost || !ControllerFocus.shared.immersive {
+                    close()
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(500))
             }
         }
     }
@@ -302,6 +305,6 @@ struct ControllerRecoveryView: View {
         if !ControllerFocus.shared.immersive {
             openWindow(id: "Entry")
         }
-        dismissWindow(id: "ControllerRecovery")
+        dismissWindow(id: "ControllerRecovery", value: Self.value)
     }
 }
