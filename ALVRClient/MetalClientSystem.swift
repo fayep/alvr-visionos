@@ -55,6 +55,8 @@ class MetalClientSystem {
         
         EventHandler.shared.handleHeadsetRemovedOrReentry()
         let timeSinceLastLoop = CACurrentMediaTime()
+        ControllerFocus.shared.immersive = true
+        defer { ControllerFocus.shared.immersive = false }
         while EventHandler.shared.renderStarted {
             if layerRenderer.state == .invalidated {
                 print("Layer is invalidated")
