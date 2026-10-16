@@ -2087,6 +2087,13 @@ class WorldTracker {
             }
         }
         
+        var sawPsvr = false
+        var sawPsvrInput = false
+        defer {
+            ControllerFocus.shared.update(sawController: sawPsvr && !controllersAreDisabledByClickTogether,
+                                          sawInput: sawPsvrInput, streaming: EventHandler.shared.streamingActive,
+                                          poses: [leftControllerPose, rightControllerPose])
+        }
         for controller in GCController.controllers() {
             let isLeft = (controller.vendorName == "Joy-Con (L)") || (controller.vendorName == "PlayStation VR2 Sense Controller (L)")
             var isBoth = (controller.vendorName == "Joy-Con (L/R)") || !(controller.vendorName?.contains("Joy-Con") ?? true)
@@ -2101,8 +2108,13 @@ class WorldTracker {
             //print(controller.vendorName, controller.physicalInputProfile.elements, controller.physicalInputProfile.allButtons)
 
             controller.input.inputStateQueueDepth = 1
-            guard let capturedInput = controller.input.nextInputState() else {
-                continue
+            // No queued state once the app has lost and regained focus (Siri, the Mac's screen), so
+            // fall back to the current one rather than going silent until the app is reopened.
+            let capturedInput: GCControllerInputState =
+                controller.input.nextInputState() ?? controller.input.capture()
+            if isPsvr {
+                sawPsvr = true
+                sawPsvrInput = sawPsvrInput || ControllerFocus.hasInput(capturedInput)
             }
             let claimHomeButton = ALVRClientApp.gStore.settings.claimControllerHomeButton
             if claimHomeButton {
@@ -3677,5 +3689,59 @@ class WorldTracker {
         let val = ((ipd * 0.5) / tan(angle * 0.5)) * 4.0 // Not correct but worked on PFD
         //let val = vergenceDepthTest(leftMat, rightMat) * 4.0
         return (val > 100.0) ? 0.25 : val
+    }
+}
+
+/// Notices when visionOS stops passing controller input to the app, which it does for good once
+/// another window (Siri, the Mac's screen) has had focus, while tracking and haptics carry on.
+/// A held PS VR2 controller always reports a finger touching something, so all-zero input for a
+/// while means the input is gone, and the app shows a window, which hands the input back. Only
+/// while a controller is moving, so controllers left on a desk during hand tracking stay quiet.
+final class ControllerFocus: ObservableObject {
+    static let shared = ControllerFocus()
+    @Published private(set) var lost = false
+    /// Set while the stream is on screen; the lobby gets no controller input either.
+    var immersive = false
+    private var lastInput = CACurrentMediaTime()
+    private var silentPoses: [simd_float4x4?] = []
+    private var movedWhileSilent = false
+    private let timeout = 2.0
+    private let moveDistance: Float = 0.02
+    private let moveAngle: Float = 8 * .pi / 180
+
+    static func hasInput(_ state: GCControllerInputState) -> Bool {
+        for button in state.buttons {
+            if button.pressedInput.isPressed || (button.touchedInput?.isTouched ?? false) {
+                return true
+            }
+        }
+        for dpad in state.dpads {
+            if abs(dpad.xAxis.value) > 0.1 || abs(dpad.yAxis.value) > 0.1 {
+                return true
+            }
+        }
+        return false
+    }
+
+    func update(sawController: Bool, sawInput: Bool, streaming: Bool, poses: [simd_float4x4?]) {
+        let now = CACurrentMediaTime()
+        if sawInput || !sawController || !streaming || !immersive {
+            lastInput = now
+            silentPoses = poses
+            movedWhileSilent = false
+        } else if !movedWhileSilent {
+            for (start, pose) in zip(silentPoses, poses) {
+                guard let start, let pose else { continue }
+                let distance = simd_distance(start.columns.3, pose.columns.3)
+                let turn = 2 * acos(min(1, abs(simd_dot(simd_quatf(start).vector, simd_quatf(pose).vector))))
+                if distance > moveDistance || turn > moveAngle {
+                    movedWhileSilent = true
+                }
+            }
+        }
+        let isLost = now - lastInput > timeout && movedWhileSilent
+        if isLost != lost {
+            DispatchQueue.main.async { self.lost = isLost }
+        }
     }
 }

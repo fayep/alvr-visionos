@@ -49,6 +49,7 @@ struct ALVRClientApp: App {
     static var gStore = GlobalSettingsStore()
     // Triggers body re-evaluation, and the .upper​Limb​Visibility modifiers will pick up the new show​Hands​Overlaid or progressive value live
     @ObservedObject private var observedGStore = ALVRClientApp.gStore
+    @ObservedObject private var controllerFocus = ControllerFocus.shared
 
     @State private var clientImmersionStyle: ImmersionStyle = .mixed
     @State private var realityKitImmersionStyle: ImmersionStyle = ALVRClientApp.gStore.settings.enableProgressive ? .progressive : .mixed
@@ -229,7 +230,10 @@ struct ALVRClientApp: App {
 
         ImmersiveSpace(id: "RealityKitClient") {
             RealityKitClientView()
+                .onAppear { ControllerFocus.shared.immersive = true }
+                .onDisappear { ControllerFocus.shared.immersive = false }
         }
+        .onChange(of: controllerFocus.lost) { _, lost in showControllerRecovery(lost) }
         .disablePersistentSystemOverlaysForVisionOS2(shouldDisable: ALVRClientApp.gStore.settings.disablePersistentSystemOverlays ? .hidden : .automatic)
         .immersionStyle(selection: $realityKitImmersionStyle, in: .mixed, .progressive)
         .upperLimbVisibility(ALVRClientApp.gStore.settings.showHandsOverlaid ? .visible : .hidden)
@@ -240,8 +244,41 @@ struct ALVRClientApp: App {
                 system.startRenderLoop()
             }
         }
+        .onChange(of: controllerFocus.lost) { _, lost in showControllerRecovery(lost) }
         .disablePersistentSystemOverlaysForVisionOS2(shouldDisable: ALVRClientApp.gStore.settings.disablePersistentSystemOverlays ? .hidden : .automatic)
         .immersionStyle(selection: $clientImmersionStyle, in: .mixed, .full)
         .upperLimbVisibility(ALVRClientApp.gStore.settings.showHandsOverlaid ? .visible : .hidden)
+
+        WindowGroup(id: "ControllerRecovery") {
+            ControllerRecoveryView()
+        }
+        .windowResizability(.contentSize)
+    }
+
+    private func showControllerRecovery(_ lost: Bool) {
+        if lost {
+            openWindow(id: "ControllerRecovery")
+        } else {
+            dismissWindow(id: "ControllerRecovery")
+        }
+    }
+}
+
+/// Floats in front of the stream when the controllers' buttons have gone (see ControllerFocus).
+/// Opening it is what hands them back: the app has focus again, and the window closes itself
+/// once input returns.
+struct ControllerRecoveryView: View {
+    @Environment(\.dismissWindow) private var dismissWindow
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Reconnecting the controllers' buttons")
+                .font(.headline)
+            Button("Dismiss") {
+                dismissWindow(id: "ControllerRecovery")
+            }
+        }
+        .padding(28)
+        .handlesGameControllerEvents(matching: .gamepad)
     }
 }
