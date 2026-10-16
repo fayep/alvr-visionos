@@ -230,8 +230,8 @@ struct ALVRClientApp: App {
 
         ImmersiveSpace(id: "RealityKitClient") {
             RealityKitClientView()
-                .onAppear { ControllerFocus.shared.immersive = true }
-                .onDisappear { ControllerFocus.shared.immersive = false }
+                .onAppear { ControllerFocus.shared.realityKitShown = true }
+                .onDisappear { ControllerFocus.shared.realityKitShown = false }
         }
         .onChange(of: controllerFocus.lost) { _, lost in showControllerRecovery(lost) }
         .disablePersistentSystemOverlaysForVisionOS2(shouldDisable: ALVRClientApp.gStore.settings.disablePersistentSystemOverlays ? .hidden : .automatic)
