@@ -253,6 +253,8 @@ struct ALVRClientApp: App {
             ControllerRecoveryView()
         }
         .windowResizability(.contentSize)
+        // Left open when the app quit, visionOS would bring it back in place of the lobby.
+        .disableRestorationForVisionOS26()
     }
 
     private func showControllerRecovery(_ lost: Bool) {
@@ -269,16 +271,31 @@ struct ALVRClientApp: App {
 /// once input returns.
 struct ControllerRecoveryView: View {
     @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 16) {
             Text("Reconnecting the controllers' buttons")
                 .font(.headline)
             Button("Dismiss") {
-                dismissWindow(id: "ControllerRecovery")
+                close()
             }
         }
         .padding(28)
         .handlesGameControllerEvents(matching: .gamepad)
+        .onAppear {
+            // Only wanted over the stream, while the input is gone.
+            if !ControllerFocus.shared.lost || !ControllerFocus.shared.immersive {
+                close()
+            }
+        }
+    }
+
+    private func close() {
+        // Without the stream this would be the app's only window, so leave the lobby behind.
+        if !ControllerFocus.shared.immersive {
+            openWindow(id: "Entry")
+        }
+        dismissWindow(id: "ControllerRecovery")
     }
 }
