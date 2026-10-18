@@ -1233,20 +1233,26 @@ class WorldTracker {
             
             controllerPose = controllerPose * positionCorrection.asFloat4x4()
             
-            // Convert from controller space to world space
-            let controllerLinVel = (controllerPose.orientationOnly() * predictedAnchor!.velocity).asSanitized()
-            let controllerAngVel = (controllerPose.orientationOnly() * predictedAnchor!.angularVelocity).asSanitized()
+            // Convert from the anchor's space to world space. ARKit gives the velocities in the
+            // anchor's own frame, which is turned from the grip's, and the linear one is the
+            // anchor origin's: the pose sent moves with the controller's spin as well.
+            let anchorTransform = predictedAnchor!.originFromAnchorTransform.asSanitized()
+            let controllerAngVel = (anchorTransform.orientationOnly() * predictedAnchor!.angularVelocity).asSanitized()
+            let leverArm = (controllerPose.columns.3 - anchorTransform.columns.3).asFloat3()
+            let controllerLinVel = (anchorTransform.orientationOnly() * predictedAnchor!.velocity
+                                    + simd_cross(controllerAngVel, leverArm)).asSanitized()
             let transform = self.worldTrackingSteamVRTransform.inverse * controllerPose
             let orientation = (simd_quaternion(transform) * rotationCorrection).asSanitized()
             let position = transform.columns.3.asSanitized()
             
             // Convert from Apple space to SteamVR space
             let linVelAdjusted = (self.worldTrackingSteamVRTransform.orientationOnly().inverse * controllerLinVel).asSanitized()
+            let angVelAdjusted = (self.worldTrackingSteamVRTransform.orientationOnly().inverse * controllerAngVel).asSanitized()
             
             let pose = AlvrPose(orientation: AlvrQuat(x: orientation.vector.x, y: orientation.vector.y, z: orientation.vector.z, w: orientation.vector.w), position: (position.x, position.y, position.z))
             
             objc_sync_exit(controllerLock)
-            return AlvrDeviceMotion(device_id: device_id, pose: pose, linear_velocity: (linVelAdjusted.x, linVelAdjusted.y, linVelAdjusted.z), angular_velocity: (controllerAngVel.x, controllerAngVel.y, controllerAngVel.z))
+            return AlvrDeviceMotion(device_id: device_id, pose: pose, linear_velocity: (linVelAdjusted.x, linVelAdjusted.y, linVelAdjusted.z), angular_velocity: (angVelAdjusted.x, angVelAdjusted.y, angVelAdjusted.z))
         }
         return nil
     }
