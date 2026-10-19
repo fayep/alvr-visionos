@@ -23,12 +23,35 @@ extension GCController {
     /// This is only a request: the system honors it when the user's "in-app action" for the controller
     /// Home button is set to "Defer to app" in Settings (visionOS 27). See `ControllerHomeButtonStatus`.
     func claimHomeButtonFromSystem() {
-        guard let home = physicalInputProfile.buttons[GCInputButtonHome] else {
+        // The documented place; the PS VR2 Sense controllers don't list their PS button there, so
+        // also the gamepad profile's, and any element named for Home.
+        var found: GCControllerElement? = physicalInputProfile.buttons[GCInputButtonHome]
+        var place = "physicalInputProfile"
+        if found == nil, let home = extendedGamepad?.buttonHome {
+            found = home
+            place = "extendedGamepad"
+        }
+        if found == nil, let home = physicalInputProfile.elements.values.first(where: { element in
+            element.aliases.contains { $0.localizedCaseInsensitiveContains("home") }
+        }) {
+            found = home
+            place = "an element named \(home.aliases.sorted())"
+        }
+        guard let home = found else {
+            GCController.reportHomeClaim("\(vendorName ?? "?"): no Home button anywhere; elements \(physicalInputProfile.elements.keys.sorted()), extendedGamepad \(extendedGamepad != nil)")
             return
         }
+        GCController.reportHomeClaim("\(vendorName ?? "?"): Home button in \(place)")
         if home.preferredSystemGestureState != .disabled {
             home.preferredSystemGestureState = .disabled
+            GCController.reportHomeClaim("\(vendorName ?? "?"): asked; gesture state now \(home.preferredSystemGestureState.rawValue), status \(ControllerHomeButtonStatus.shared.state)")
         }
+    }
+
+    /// Diagnostics, once per message: printed to the console (devicectl launch --console).
+    private static var homeClaimReports = Set<String>()
+    static func reportHomeClaim(_ message: String) {
+        if homeClaimReports.insert(message).inserted { print("HomeButton: \(message)") }
     }
 }
 
@@ -95,8 +118,10 @@ final class ControllerHomeButtonStatus: ObservableObject {
         do {
             let (action, _) = try m.controllerHomeButtonInAppAction
             state = (action == .defer) ? .deliveredToApp : .systemHandles
+            print("HomeButton: in-app action \(action), so \(state)")
         }
         catch {
+            print("HomeButton: can't read the in-app action: \(error)")
             // Reading needs a connected controller; try again on the next start() call.
             manager = nil
             updatesTask?.cancel()

@@ -132,6 +132,10 @@ struct Entry: View {
                     if gStore.settings.claimControllerHomeButton {
                         ControllerHomeButtonHint()
                     }
+                    Toggle(isOn: $gStore.settings.rightOptionsIsSystem) {
+                        Text("Right Options button acts as System (for PS VR2 Sense)")
+                    }
+                    .toggleStyle(.switch)
                     
                     HStack {
                         Text("Stream refresh rate*")

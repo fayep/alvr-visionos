@@ -32,6 +32,9 @@ struct GlobalSettings: Codable {
     var chaperoneDistanceCm: Int = 0
     var showPerformanceHud: Bool = false
     var claimControllerHomeButton: Bool = true
+    /// The PS VR2 Sense controllers' right Options button also acts as the system button, as visionOS
+    /// keeps their PS button.
+    var rightOptionsIsSystem: Bool = true
     
     init() {}
     
@@ -62,6 +65,7 @@ struct GlobalSettings: Codable {
         self.chaperoneDistanceCm = try container.decodeIfPresent(Int.self, forKey: .chaperoneDistanceCm) ?? self.chaperoneDistanceCm
         self.showPerformanceHud = try container.decodeIfPresent(Bool.self, forKey: .showPerformanceHud) ?? self.showPerformanceHud
         self.claimControllerHomeButton = try container.decodeIfPresent(Bool.self, forKey: .claimControllerHomeButton) ?? self.claimControllerHomeButton
+        self.rightOptionsIsSystem = try container.decodeIfPresent(Bool.self, forKey: .rightOptionsIsSystem) ?? self.rightOptionsIsSystem
     }
 }
 

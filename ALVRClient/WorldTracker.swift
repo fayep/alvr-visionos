@@ -436,6 +436,9 @@ class WorldTracker {
     var leftPinchCurrentPosition = simd_float3(0.0, 0.0, 0.0)
     var leftPinchStartAngle = simd_quatf()
     var leftPinchCurrentAngle = simd_quatf()
+    /// A pinch sent as a controller used to hide the hand's skeleton for its duration, as SteamVR
+    /// wants one or the other; an OpenXR runtime takes both, and an app drawing the hand needs it.
+    static let keepSkeletonsThroughPinches = true
     var leftIsPinching = false
     var lastLeftIsPinching = false
     var leftPinchTrigger: Float = 0.0
@@ -2143,10 +2146,9 @@ class WorldTracker {
                     }
                 }
             }
-            // The Home button drives the system click when we know it reaches us. Otherwise the menu
-            // button keeps doubling as the system click, like before.
+            // The Home button drives the system click when it reaches us; for the PS VR2 Sense
+            // controllers it never does, so their right Options button can be the system button too.
             let buttons = capturedInput.buttons
-            let homeButtonReachesApp = claimHomeButton && ControllerHomeButtonStatus.shared.reachesApp
             let homePressed = buttons["Button Home"]?.pressedInput.isPressed ?? false
             let homeTouched = buttons["Button Home"]?.touchedInput?.isTouched ?? false
             let dpads = capturedInput.dpads
@@ -2229,10 +2231,13 @@ class WorldTracker {
 
                         let menuPressed = buttons["Button Menu"]?.pressedInput.isPressed ?? false
                         let menuTouched = buttons["Button Menu"]?.touchedInput?.isTouched ?? false
+                        // As on Touch controllers: the left Options (Create) button is the menu button, the right
+                        // one the system button. The PS button can't stand in: visionOS keeps it (FB: the Sense
+                        // controllers don't list it in physicalInputProfile, so the app can't ask for it).
                         alvr_send_button(WorldTracker.leftMenuTouched, boolVal(menuTouched))
-                        alvr_send_button(WorldTracker.leftSystemTouched, boolVal(homeTouched || (!homeButtonReachesApp && menuTouched)))
+                        alvr_send_button(WorldTracker.leftSystemTouched, boolVal(homeTouched))
                         alvr_send_button(WorldTracker.leftMenuClick, boolVal(menuPressed))
-                        alvr_send_button(WorldTracker.leftSystemClick, boolVal(homePressed || (!homeButtonReachesApp && menuPressed)))
+                        alvr_send_button(WorldTracker.leftSystemClick, boolVal(homePressed))
 
                     }
                     else {
@@ -2262,10 +2267,13 @@ class WorldTracker {
 
                         let menuPressed = buttons["Button Menu"]?.pressedInput.isPressed ?? false
                         let menuTouched = buttons["Button Menu"]?.touchedInput?.isTouched ?? false
+                        // The right Options button can be the system button (see the left's); it's sent as
+                        // itself too, for a runtime that shows the controller.
+                        let optionsIsSystem = ALVRClientApp.gStore.settings.rightOptionsIsSystem
                         alvr_send_button(WorldTracker.rightMenuTouched, boolVal(menuTouched))
-                        alvr_send_button(WorldTracker.rightSystemTouched, boolVal(homeTouched || (!homeButtonReachesApp && menuTouched)))
+                        alvr_send_button(WorldTracker.rightSystemTouched, boolVal(homeTouched || (optionsIsSystem && menuTouched)))
                         alvr_send_button(WorldTracker.rightMenuClick, boolVal(menuPressed))
-                        alvr_send_button(WorldTracker.rightSystemClick, boolVal(homePressed || (!homeButtonReachesApp && menuPressed)))
+                        alvr_send_button(WorldTracker.rightSystemClick, boolVal(homePressed || (optionsIsSystem && menuPressed)))
                     }
                 }
             }
@@ -3229,7 +3237,7 @@ class WorldTracker {
                 trackingMotions.append(pinchToAlvrDeviceMotion(.left))
                 trackingMotions.append(pinchToAlvrDeviceMotion(.right))
                 
-                if steamVRInput2p0Enabled {
+                if steamVRInput2p0Enabled && !WorldTracker.keepSkeletonsThroughPinches {
                     leftSkeletonDisableHysteresis = skeletonHysteresisForPinches
                     rightSkeletonDisableHysteresis = skeletonHysteresisForPinches
                     skeletonLeft = nil
@@ -3249,7 +3257,7 @@ class WorldTracker {
                         leftPinchTrigger = 1.0
                     }
                     
-                    if steamVRInput2p0Enabled{
+                    if steamVRInput2p0Enabled && !WorldTracker.keepSkeletonsThroughPinches {
                         leftSkeletonDisableHysteresis = skeletonHysteresisForPinches
                         skeletonLeft = nil
                     }
@@ -3267,7 +3275,7 @@ class WorldTracker {
                     if leftPinchTrigger < 0.0 {
                         leftPinchTrigger = 0.0
                     }
-                    if steamVRInput2p0Enabled {
+                    if steamVRInput2p0Enabled && !WorldTracker.keepSkeletonsThroughPinches {
                         leftSkeletonDisableHysteresis = skeletonHysteresisForPinches
                         skeletonLeft = nil
                     }
@@ -3283,7 +3291,7 @@ class WorldTracker {
                         rightPinchTrigger = 1.0
                     }
                     
-                    if steamVRInput2p0Enabled {
+                    if steamVRInput2p0Enabled && !WorldTracker.keepSkeletonsThroughPinches {
                         rightSkeletonDisableHysteresis = skeletonHysteresisForPinches
                         skeletonRight = nil
                     }
@@ -3302,7 +3310,7 @@ class WorldTracker {
                         rightPinchTrigger = 0.0
                     }
                     
-                    if steamVRInput2p0Enabled {
+                    if steamVRInput2p0Enabled && !WorldTracker.keepSkeletonsThroughPinches {
                         rightSkeletonDisableHysteresis = skeletonHysteresisForPinches
                         skeletonRight = nil
                     }
@@ -3762,8 +3770,33 @@ final class ControllerFocus: ObservableObject {
         return false
     }
 
+    private var lastReport = 0.0
+    private var watchingConnections = false
+
+    /// Diagnostics for the input going missing: printed to the console (devicectl launch --console).
+    private func report(_ now: Double, sawController: Bool, sawInput: Bool, streaming: Bool) {
+        if !watchingConnections {
+            watchingConnections = true
+            for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect,
+                         .GCControllerDidBecomeCurrent, .GCControllerDidStopBeingCurrent] {
+                NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { note in
+                    let c = note.object as? GCController
+                    print("ControllerFocus: \(name.rawValue) \(c?.vendorName ?? "?")")
+                }
+            }
+        }
+        guard now - lastReport > 2 else { return }
+        lastReport = now
+        let listed = GCController.controllers().map { c -> String in
+            return "\(c.vendorName ?? "?") input=\(ControllerFocus.hasInput(c.input.capture()))"
+        }
+        print("ControllerFocus: lost=\(lost) immersive=\(immersive) streaming=\(streaming) sawController=\(sawController) " +
+              "sawInput=\(sawInput) silentFor=\(String(format: "%.1f", now - lastInput)) controllers=\(listed)")
+    }
+
     func update(sawController: Bool, sawInput: Bool, streaming: Bool, poses: [simd_float4x4?]) {
         let now = CACurrentMediaTime()
+        report(now, sawController: sawController, sawInput: sawInput, streaming: streaming)
         if sawInput || !sawController || !streaming || !immersive {
             lastInput = now
             silentPoses = poses
