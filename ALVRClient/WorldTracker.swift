@@ -1790,7 +1790,7 @@ class WorldTracker {
                 
                 if leftEngine == nil {
                     for locality in haptics.supportedLocalities {
-                        if (locality.rawValue as String).contains("(L)") {
+                        if (locality.rawValue as String).uppercased().contains("(L)") {
                             leftEngine = haptics.createEngine(withLocality: locality)
                         }
                     }
@@ -1800,6 +1800,7 @@ class WorldTracker {
                     leftEngine = haptics.createEngine(withLocality: GCHapticsLocality.all)
                 }
                 
+                print("Haptics: left engine from \(haptics.supportedLocalities.map { $0.rawValue as String }.sorted())", leftEngine == nil ? "none" : "made")
                 if leftEngine != nil {
                     do {
                         try leftEngine?.start()
@@ -1853,7 +1854,7 @@ class WorldTracker {
                 
                 if rightEngine == nil {
                     for locality in haptics.supportedLocalities {
-                        if (locality.rawValue as String).contains("(r)") {
+                        if (locality.rawValue as String).uppercased().contains("(R)") {
                             rightEngine = haptics.createEngine(withLocality: locality)
                         }
                     }
@@ -1863,6 +1864,7 @@ class WorldTracker {
                     rightEngine = haptics.createEngine(withLocality: GCHapticsLocality.all)
                 }
                 
+                print("Haptics: right engine from \(haptics.supportedLocalities.map { $0.rawValue as String }.sorted())", rightEngine == nil ? "none" : "made")
                 if rightEngine != nil {
                     do {
                         try rightEngine?.start()
@@ -2112,6 +2114,7 @@ class WorldTracker {
                                           sawInput: sawPsvrInput, streaming: EventHandler.shared.streamingActive,
                                           poses: [leftControllerPose, rightControllerPose])
         }
+        joyConsConnected = GCController.controllers().contains { $0.vendorName?.contains("Joy-Con") ?? false }
         for controller in GCController.controllers() {
             let isLeft = (controller.vendorName == "Joy-Con (L)") || (controller.vendorName == "PlayStation VR2 Sense Controller (L)")
             var isBoth = (controller.vendorName == "Joy-Con (L/R)") || !(controller.vendorName?.contains("Joy-Con") ?? true)
@@ -2133,6 +2136,13 @@ class WorldTracker {
             if isPsvr {
                 sawPsvr = true
                 sawPsvrInput = sawPsvrInput || ControllerFocus.hasInput(capturedInput)
+            }
+            // Joy-Cons after a hand clack (see handClack): pressing any of their buttons is back to
+            // controllers.
+            if !isPsvr && controllersAreDisabledByClickTogether && ControllerFocus.hasInput(capturedInput)
+                && (controller.vendorName?.contains("Joy-Con") ?? false) {
+                print("Joy-Con input: back to controllers")
+                controllersAreDisabledByClickTogether = false
             }
             let claimHomeButton = ALVRClientApp.gStore.settings.claimControllerHomeButton
             if claimHomeButton {
@@ -2286,32 +2296,36 @@ class WorldTracker {
                     leftAssociatedAxis = ["Left Thumbstick X Axis", "Left Thumbstick Y Axis", "Direction Pad X Axis", "Direction Pad Y Axis", "Left Trigger"]
                     rightAssociatedAxis = ["Right Thumbstick X Axis", "Right Thumbstick Y Axis", "Right Trigger"]
 
-                    alvr_send_button(WorldTracker.rightButtonA, boolVal(gp.buttonA.isPressed))
-                    alvr_send_button(WorldTracker.rightButtonB, boolVal(gp.buttonB.isPressed))
+                    // A pair of Joy-Cons, held upright: A and B swap places, as do the trigger and grip below.
+                    let joyCons = controller.vendorName == "Joy-Con (L/R)"
+                    alvr_send_button(WorldTracker.rightButtonA, boolVal(joyCons ? gp.buttonB.isPressed : gp.buttonA.isPressed))
+                    alvr_send_button(WorldTracker.rightButtonB, boolVal(joyCons ? gp.buttonA.isPressed : gp.buttonB.isPressed))
                     alvr_send_button(WorldTracker.rightButtonY, boolVal(gp.buttonY.isPressed))
 
                     // Kinda weird here, we're emulating Quest controllers bc we don't have a real input profile.
                     alvr_send_button(WorldTracker.leftButtonY, boolVal(gp.dpad.right.isPressed))
                     alvr_send_button(WorldTracker.leftButtonX, boolVal(gp.dpad.down.isPressed || gp.dpad.left.isPressed))
 
-                    // ZL/ZR -> Trigger
+                    // ZL/ZR -> Trigger, L/R -> Squeeze; on a pair of Joy-Cons held upright, the other way round,
+                    // so the trigger is the upper button.
+                    let leftTrigger = joyCons ? gp.leftShoulder : gp.leftTrigger, rightTrigger = joyCons ? gp.rightShoulder : gp.rightTrigger
+                    let leftGrip = joyCons ? gp.leftTrigger : gp.leftShoulder, rightGrip = joyCons ? gp.rightTrigger : gp.rightShoulder
                     if self.leftPinchTrigger <= 0.0 {
-                        alvr_send_button(WorldTracker.leftTriggerClick, boolVal(gp.leftTrigger.isPressed))
-                        alvr_send_button(WorldTracker.leftTriggerValue, scalarVal(gp.leftTrigger.value))
+                        alvr_send_button(WorldTracker.leftTriggerClick, boolVal(leftTrigger.isPressed))
+                        alvr_send_button(WorldTracker.leftTriggerValue, scalarVal(leftTrigger.value))
                     }
                     if self.rightPinchTrigger <= 0.0 {
-                        alvr_send_button(WorldTracker.rightTriggerClick, boolVal(gp.rightTrigger.isPressed))
-                        alvr_send_button(WorldTracker.rightTriggerValue, scalarVal(gp.rightTrigger.value))
+                        alvr_send_button(WorldTracker.rightTriggerClick, boolVal(rightTrigger.isPressed))
+                        alvr_send_button(WorldTracker.rightTriggerValue, scalarVal(rightTrigger.value))
                     }
 
-                    // L/R -> Squeeze
-                    alvr_send_button(WorldTracker.leftSqueezeClick, boolVal(gp.leftShoulder.isPressed || gp.dpad.up.isPressed))
-                    alvr_send_button(WorldTracker.leftSqueezeValue, scalarVal(max(gp.leftShoulder.value, gp.dpad.up.isPressed ? 1.0 : 0.0)))
-                    alvr_send_button(WorldTracker.leftSqueezeForce, scalarVal(max(gp.leftShoulder.value, gp.dpad.up.isPressed ? 1.0 : 0.0)))
+                    alvr_send_button(WorldTracker.leftSqueezeClick, boolVal(leftGrip.isPressed || gp.dpad.up.isPressed))
+                    alvr_send_button(WorldTracker.leftSqueezeValue, scalarVal(max(leftGrip.value, gp.dpad.up.isPressed ? 1.0 : 0.0)))
+                    alvr_send_button(WorldTracker.leftSqueezeForce, scalarVal(max(leftGrip.value, gp.dpad.up.isPressed ? 1.0 : 0.0)))
 
-                    alvr_send_button(WorldTracker.rightSqueezeClick, boolVal(gp.rightShoulder.isPressed || gp.buttonX.isPressed))
-                    alvr_send_button(WorldTracker.rightSqueezeValue, scalarVal(max(gp.rightShoulder.value, gp.buttonX.isPressed ? 1.0 : 0.0)))
-                    alvr_send_button(WorldTracker.rightSqueezeForce, scalarVal(max(gp.rightShoulder.value, gp.buttonX.isPressed ? 1.0 : 0.0)))
+                    alvr_send_button(WorldTracker.rightSqueezeClick, boolVal(rightGrip.isPressed || gp.buttonX.isPressed))
+                    alvr_send_button(WorldTracker.rightSqueezeValue, scalarVal(max(rightGrip.value, gp.buttonX.isPressed ? 1.0 : 0.0)))
+                    alvr_send_button(WorldTracker.rightSqueezeForce, scalarVal(max(rightGrip.value, gp.buttonX.isPressed ? 1.0 : 0.0)))
 
                     // Thumbsticks
                     alvr_send_button(WorldTracker.leftThumbstickX, scalarVal(gp.leftThumbstick.xAxis.value))
@@ -2321,13 +2335,22 @@ class WorldTracker {
                     alvr_send_button(WorldTracker.leftThumbstickClick, boolVal(gp.leftThumbstickButton?.isPressed ?? false))
                     alvr_send_button(WorldTracker.rightThumbstickClick, boolVal(gp.rightThumbstickButton?.isPressed ?? false))
 
-                    // System buttons of various varieties (whichever one actually hits)
-                    let leftSystem = (buttons["Button Home"]?.pressedInput.isPressed ?? false) || (buttons["Button Menu"]?.pressedInput.isPressed ?? false)
-                    let rightSystem = (buttons["Button Share"]?.pressedInput.isPressed ?? false) || (buttons["Button Options"]?.pressedInput.isPressed ?? false)
-                    alvr_send_button(WorldTracker.leftSystemClick, boolVal(leftSystem))
-                    alvr_send_button(WorldTracker.rightSystemClick, boolVal(rightSystem))
-                    alvr_send_button(WorldTracker.leftMenuClick, boolVal(leftSystem))
-                    alvr_send_button(WorldTracker.rightMenuClick, boolVal(rightSystem))
+                    if joyCons {
+                        // Joined, Plus is reported as Button Menu and Minus as Button Options: Minus is the left
+                        // menu button, and Plus the right one (held, the system button), as when apart.
+                        alvr_send_button(WorldTracker.leftMenuClick, boolVal(buttons["Button Options"]?.pressedInput.isPressed ?? false))
+                        alvr_send_button(WorldTracker.leftSystemClick, boolVal(buttons["Button Share"]?.pressedInput.isPressed ?? false))
+                        sendJoyConPlus(buttons["Button Menu"]?.pressedInput.isPressed ?? false,
+                                       home: buttons["Button Home"]?.pressedInput.isPressed ?? false)
+                    } else {
+                        // System buttons of various varieties (whichever one actually hits)
+                        let leftSystem = (buttons["Button Home"]?.pressedInput.isPressed ?? false) || (buttons["Button Menu"]?.pressedInput.isPressed ?? false)
+                        let rightSystem = (buttons["Button Share"]?.pressedInput.isPressed ?? false) || (buttons["Button Options"]?.pressedInput.isPressed ?? false)
+                        alvr_send_button(WorldTracker.leftSystemClick, boolVal(leftSystem))
+                        alvr_send_button(WorldTracker.rightSystemClick, boolVal(rightSystem))
+                        alvr_send_button(WorldTracker.leftMenuClick, boolVal(leftSystem))
+                        alvr_send_button(WorldTracker.rightMenuClick, boolVal(rightSystem))
+                    }
                 }
                 else {
                     // At some point we might want to use this (for separate motion), but at the moment we cannot, because it is incomplete
@@ -2407,80 +2430,101 @@ class WorldTracker {
                         }
                     }
                     else if !isLeft {
-                        rightAssociatedButtons = ["Button A", "Button B", "Button X", "Button Y", "Right Thumbstick Button", "Button Options", "Button Share",  "Right Trigger", "Right Shoulder"]
+                        rightAssociatedButtons = ["Button A", "Button B", "Button X", "Button Y", "Right Thumbstick Button", "Button Options", "Button Share",  "Left Shoulder", "Right Shoulder"]
                         rightAssociatedAxis = ["Right Thumbstick X Axis", "Right Thumbstick Y Axis", "Right Trigger"]
+                        // A lone Joy-Con is reported held sideways, without ZR or R: its rail buttons are the
+                        // shoulders, SL as Right Shoulder and SR as Left. Held upright, SL is the trigger and SR the grip.
+                        let joyConTrigger = "Right Shoulder", joyConGrip = "Left Shoulder"
 
                         alvr_send_button(WorldTracker.rightButtonA, boolVal(buttons["Button A"]?.pressedInput.isPressed ?? false))
                         alvr_send_button(WorldTracker.rightButtonB, boolVal(buttons["Button B"]?.pressedInput.isPressed ?? false))
                         alvr_send_button(WorldTracker.rightButtonX, boolVal(buttons["Button X"]?.pressedInput.isPressed ?? false))
                         alvr_send_button(WorldTracker.rightButtonY, boolVal(buttons["Button Y"]?.pressedInput.isPressed ?? false))
                         alvr_send_button(WorldTracker.rightThumbstickClick, boolVal(buttons["Right Thumbstick Button"]?.pressedInput.isPressed ?? false))
-                        alvr_send_button(WorldTracker.rightThumbstickX, scalarVal(axes["Right Thumbstick X Axis"]?.absoluteInput?.value ?? 0.0))
-                        alvr_send_button(WorldTracker.rightThumbstickY, scalarVal(axes["Right Thumbstick Y Axis"]?.absoluteInput?.value ?? 0.0))
-                        alvr_send_button(WorldTracker.rightSystemClick, boolVal((buttons["Button Options"]?.pressedInput.isPressed ?? false) ||
-                                                                                (buttons["Button Share"]?.pressedInput.isPressed ?? false) ))
-                        alvr_send_button(WorldTracker.rightMenuClick, boolVal((buttons["Button Options"]?.pressedInput.isPressed ?? false) ||
-                                                                              (buttons["Button Share"]?.pressedInput.isPressed ?? false) ))
+                        // The stick comes as the sideways Direction Pad: turned back for the Joy-Con held upright.
+                        let stick = dpads["Direction Pad"]
+                        alvr_send_button(WorldTracker.rightThumbstickX, scalarVal(stick.map { -$0.yAxis.value } ?? axes["Right Thumbstick X Axis"]?.absoluteInput?.value ?? 0.0))
+                        alvr_send_button(WorldTracker.rightThumbstickY, scalarVal(stick?.xAxis.value ?? axes["Right Thumbstick Y Axis"]?.absoluteInput?.value ?? 0.0))
+                        // Plus, which a lone Joy-Con reports as Button Menu: a tap is the right menu button, sent
+                        // on release, and holding it the system button, since visionOS keeps Home.
+                        sendJoyConPlus((buttons["Button Menu"]?.pressedInput.isPressed ?? false) ||
+                                       (buttons["Button Options"]?.pressedInput.isPressed ?? false),
+                                       home: buttons["Button Home"]?.pressedInput.isPressed ?? false)
 
                         if rightPinchTrigger <= 0.0 {
                             if #available(visionOS 26.0, *) {
-                                alvr_send_button(WorldTracker.rightTriggerValue, scalarVal(buttons["Right Trigger"]?.forceInput?.value ??  ((buttons["Right Trigger"]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0)))
+                                alvr_send_button(WorldTracker.rightTriggerValue, scalarVal(buttons[joyConTrigger]?.forceInput?.value ??  ((buttons[joyConTrigger]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0)))
                             }
                             else {
-                                alvr_send_button(WorldTracker.rightTriggerValue, scalarVal((buttons["Right Trigger"]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))
+                                alvr_send_button(WorldTracker.rightTriggerValue, scalarVal((buttons[joyConTrigger]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))
                             }
-                            alvr_send_button(WorldTracker.rightTriggerClick, boolVal(buttons["Right Trigger"]?.pressedInput.isPressed ?? false))
+                            alvr_send_button(WorldTracker.rightTriggerClick, boolVal(buttons[joyConTrigger]?.pressedInput.isPressed ?? false))
                         }
                         
-                        alvr_send_button(WorldTracker.rightSqueezeClick, boolVal(buttons["Right Shoulder"]?.pressedInput.isPressed ?? false))
+                        alvr_send_button(WorldTracker.rightSqueezeClick, boolVal(buttons[joyConGrip]?.pressedInput.isPressed ?? false))
                         if #available(visionOS 26.0, *) {
-                            alvr_send_button(WorldTracker.rightSqueezeValue, scalarVal((buttons["Right Shoulder"]?.forceInput?.value ?? ((buttons["Right Shoulder"]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))))
-                            alvr_send_button(WorldTracker.rightSqueezeForce, scalarVal((buttons["Right Shoulder"]?.forceInput?.value ?? ((buttons["Right Shoulder"]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))))
+                            alvr_send_button(WorldTracker.rightSqueezeValue, scalarVal((buttons[joyConGrip]?.forceInput?.value ?? ((buttons[joyConGrip]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))))
+                            alvr_send_button(WorldTracker.rightSqueezeForce, scalarVal((buttons[joyConGrip]?.forceInput?.value ?? ((buttons[joyConGrip]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))))
                         }
                         else {
-                            alvr_send_button(WorldTracker.rightSqueezeValue, scalarVal((buttons["Right Shoulder"]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))
-                            alvr_send_button(WorldTracker.rightSqueezeForce, scalarVal((buttons["Right Shoulder"]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))
+                            alvr_send_button(WorldTracker.rightSqueezeValue, scalarVal((buttons[joyConGrip]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))
+                            alvr_send_button(WorldTracker.rightSqueezeForce, scalarVal((buttons[joyConGrip]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))
                         }
                         
                     }
                     else {
-                        leftAssociatedButtons = ["Button A", "Button B", "Button X", "Button Y", "Left Thumbstick Button", "Button Home", "Button Menu", "Button Home", "Left Trigger", "Left Shoulder"]
+                        leftAssociatedButtons = ["Button A", "Button B", "Button X", "Button Y", "Left Thumbstick Button", "Button Home", "Button Menu", "Button Home", "Right Shoulder", "Left Shoulder"]
                         leftAssociatedAxis = ["Left Thumbstick X Axis", "Left Thumbstick Y Axis", "Left Trigger"]
-                        
+                        // As the right Joy-Con, mirrored: SR (here Left Shoulder) is the trigger and SL the grip.
+                        let joyConTrigger = "Left Shoulder", joyConGrip = "Right Shoulder"
+
                         alvr_send_button(WorldTracker.leftButtonA, boolVal(buttons["Button A"]?.pressedInput.isPressed ?? false))
                         alvr_send_button(WorldTracker.leftButtonB, boolVal(buttons["Button B"]?.pressedInput.isPressed ?? false))
                         alvr_send_button(WorldTracker.leftButtonX, boolVal(buttons["Button X"]?.pressedInput.isPressed ?? false))
                         alvr_send_button(WorldTracker.leftButtonY, boolVal(buttons["Button Y"]?.pressedInput.isPressed ?? false))
                         alvr_send_button(WorldTracker.leftThumbstickClick, boolVal(buttons["Left Thumbstick Button"]?.pressedInput.isPressed ?? false))
-                        alvr_send_button(WorldTracker.leftThumbstickX, scalarVal(axes["Left Thumbstick X Axis"]?.absoluteInput?.value ?? 0.0))
-                        alvr_send_button(WorldTracker.leftThumbstickY, scalarVal(axes["Left Thumbstick Y Axis"]?.absoluteInput?.value ?? 0.0))
-                        alvr_send_button(WorldTracker.leftSystemClick, boolVal((buttons["Button Menu"]?.pressedInput.isPressed ?? false) ||
-                                                                               (buttons["Button Home"]?.pressedInput.isPressed ?? false) ))
-                        alvr_send_button(WorldTracker.leftMenuClick, boolVal((buttons["Button Menu"]?.pressedInput.isPressed ?? false) ||
-                                                                             (buttons["Button Home"]?.pressedInput.isPressed ?? false)))
+                        // As the right Joy-Con's stick, turned the other way.
+                        let stick = dpads["Direction Pad"]
+                        alvr_send_button(WorldTracker.leftThumbstickX, scalarVal(stick?.yAxis.value ?? axes["Left Thumbstick X Axis"]?.absoluteInput?.value ?? 0.0))
+                        alvr_send_button(WorldTracker.leftThumbstickY, scalarVal(stick.map { -$0.xAxis.value } ?? axes["Left Thumbstick Y Axis"]?.absoluteInput?.value ?? 0.0))
+                        // Minus (Button Menu) is the left menu button and Capture (Button Share) the system button,
+                        // apart, so a game's menu and SteamVR's dashboard don't open together.
+                        alvr_send_button(WorldTracker.leftSystemClick, boolVal((buttons["Button Share"]?.pressedInput.isPressed ?? false) || (buttons["Button Home"]?.pressedInput.isPressed ?? false)))
+                        alvr_send_button(WorldTracker.leftMenuClick, boolVal(buttons["Button Menu"]?.pressedInput.isPressed ?? false))
 
                         if leftPinchTrigger <= 0.0 {
                             if #available(visionOS 26.0, *) {
-                                alvr_send_button(WorldTracker.leftTriggerValue, scalarVal(buttons["Left Trigger"]?.forceInput?.value ??  ((buttons["Left Trigger"]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0)))
+                                alvr_send_button(WorldTracker.leftTriggerValue, scalarVal(buttons[joyConTrigger]?.forceInput?.value ??  ((buttons[joyConTrigger]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0)))
                             }
                             else {
-                                alvr_send_button(WorldTracker.leftTriggerValue, scalarVal((buttons["Left Trigger"]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))
+                                alvr_send_button(WorldTracker.leftTriggerValue, scalarVal((buttons[joyConTrigger]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))
                             }
-                            alvr_send_button(WorldTracker.leftTriggerClick, boolVal(buttons["Left Trigger"]?.pressedInput.isPressed ?? false))
+                            alvr_send_button(WorldTracker.leftTriggerClick, boolVal(buttons[joyConTrigger]?.pressedInput.isPressed ?? false))
                         }
-                        alvr_send_button(WorldTracker.leftSqueezeClick, boolVal(buttons["Left Shoulder"]?.pressedInput.isPressed ?? false))
+                        alvr_send_button(WorldTracker.leftSqueezeClick, boolVal(buttons[joyConGrip]?.pressedInput.isPressed ?? false))
                         if #available(visionOS 26.0, *) {
-                            alvr_send_button(WorldTracker.leftSqueezeValue, scalarVal((buttons["Left Shoulder"]?.forceInput?.value ?? ((buttons["Left Shoulder"]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))))
-                            alvr_send_button(WorldTracker.leftSqueezeForce, scalarVal((buttons["Left Shoulder"]?.forceInput?.value ?? ((buttons["Left Shoulder"]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))))
+                            alvr_send_button(WorldTracker.leftSqueezeValue, scalarVal((buttons[joyConGrip]?.forceInput?.value ?? ((buttons[joyConGrip]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))))
+                            alvr_send_button(WorldTracker.leftSqueezeForce, scalarVal((buttons[joyConGrip]?.forceInput?.value ?? ((buttons[joyConGrip]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))))
                         }
                         else {
-                            alvr_send_button(WorldTracker.leftSqueezeValue, scalarVal((buttons["Left Shoulder"]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))
-                            alvr_send_button(WorldTracker.leftSqueezeForce, scalarVal((buttons["Left Shoulder"]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))
+                            alvr_send_button(WorldTracker.leftSqueezeValue, scalarVal((buttons[joyConGrip]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))
+                            alvr_send_button(WorldTracker.leftSqueezeForce, scalarVal((buttons[joyConGrip]?.pressedInput.isPressed ?? false) ? 1.0 : 0.0))
                         }
                     }
                 }
             }
-            
+
+            // A connected controller stays a controller, not hands, while it's idle; clacking the
+            // controllers together is what switches to hands.
+            if !controllersAreDisabledByClickTogether {
+                if isLeft || isBoth {
+                    leftSkeletonDisableHysteresis = defaultSkeletonDisableHysteresis
+                }
+                if !isLeft || isBoth {
+                    rightSkeletonDisableHysteresis = defaultSkeletonDisableHysteresis
+                }
+            }
+
             for val in leftAssociatedButtons {
                 if buttons[val]?.pressedInput.isPressed ?? false {
                     leftSkeletonDisableHysteresis = defaultSkeletonDisableHysteresis
@@ -2527,7 +2571,89 @@ class WorldTracker {
     
     var lastSentTime = 0.0
     var lastHomeButtonStatusAttempt = 0.0
-    
+    var joyConPlusDown: Double?
+    var joyConPlusIsSystem = false
+    var joyConMenuTapUntil = 0.0
+    let joyConPlusHold = 0.6
+    var joyConsConnected = false
+    var handClackLast = (time: 0.0, distance: Float(1))
+    var handClackClosing: Float = 0
+    var handClackPeak: Float = 0
+    var handClackFirst = 0.0
+
+    /// The controller clack for controllers visionOS doesn't track (Joy-Cons), from the hands holding
+    /// them: knuckles meeting fast in front of the headset and stopping, twice within 1.2 s. It
+    /// toggles hands as the clack does, and opens the window that hands the buttons back, since a
+    /// Joy-Con gives no sign that they've gone.
+    func handClack(_ leftHand: HandAnchor?, _ rightHand: HandAnchor?, headset: simd_float3) {
+        func knuckle(_ hand: HandAnchor) -> simd_float3 {
+            guard let joint = hand.handSkeleton?.joint(.middleFingerKnuckle), joint.isTracked else {
+                return hand.originFromAnchorTransform.columns.3.asFloat3()
+            }
+            return (hand.originFromAnchorTransform * joint.anchorFromJointTransform).columns.3.asFloat3()
+        }
+        guard let leftHand, let rightHand, leftHand.isTracked, rightHand.isTracked else {
+            handClackPeak = 0
+            return
+        }
+        let left = knuckle(leftHand), right = knuckle(rightHand)
+        let now = CACurrentMediaTime()
+        let distance = simd_distance(left, right)
+        let dt = Float(now - handClackLast.time)
+        defer { handClackLast = (now, distance) }
+        guard dt > 0.001 && dt < 0.1 else { return }
+        // Closing speed, smoothed over a few frames of hand tracking.
+        handClackClosing += ((handClackLast.distance - distance) / dt - handClackClosing) * 0.5
+        if handClackClosing < -0.2 || distance > 0.4 {
+            // Parting, or apart: only an approach that ends in a meeting counts.
+            handClackPeak = 0
+        } else if now - handClackFirst > 0.12 {
+            handClackPeak = max(handClackPeak, handClackClosing)
+        }
+        // An approach has ended once the hands stop closing.
+        guard handClackPeak > 0.15 && handClackClosing < 0.05 else { return }
+        let fromHeadset = simd_distance((left + right) / 2, headset)
+        guard handClackPeak > 0.4 && distance < 0.22 && fromHeadset < 0.65 else {
+            handClackPeak = 0
+            return
+        }
+        handClackPeak = 0
+        let sinceFirst = now - handClackFirst
+        print("hand clack at \(String(format: "%.3f", distance)) m, \(String(format: "%.2f", sinceFirst)) s after the last")
+        if sinceFirst > 0.12 && sinceFirst < 1.2 {
+            handClackFirst = 0
+            print("hand clack: double")
+            if ALVRClientApp.gStore.settings.enableDoubleTapForHands {
+                controllersAreDisabledByClickTogether = !controllersAreDisabledByClickTogether
+            }
+            ControllerFocus.shared.recover()
+        } else {
+            handClackFirst = now
+        }
+    }
+
+    /// A Joy-Con's Plus: a tap is the right menu button, sent on release, and holding it the system
+    /// button, since visionOS keeps Home.
+    func sendJoyConPlus(_ plus: Bool, home: Bool) {
+        let now = CACurrentMediaTime()
+        if plus {
+            if joyConPlusDown == nil {
+                joyConPlusDown = now
+                joyConPlusIsSystem = false
+            }
+            if now - joyConPlusDown! > joyConPlusHold {
+                joyConPlusIsSystem = true
+            }
+        } else if joyConPlusDown != nil {
+            if !joyConPlusIsSystem {
+                joyConMenuTapUntil = now + 0.1
+            }
+            joyConPlusDown = nil
+        }
+        alvr_send_button(WorldTracker.rightMenuClick, ALVRInputSink.boolVal(now < joyConMenuTapUntil))
+        alvr_send_button(WorldTracker.rightSystemClick, ALVRInputSink.boolVal((plus && joyConPlusIsSystem) || home))
+    }
+
     // TODO: figure out how stable Apple's predictions are into the future
     // targetTimestamp: The timestamp of the pose we will send to ALVR--capped by how far we can predict forward.
     // realTargetTimestamp: The timestamp we tell ALVR, which always includes the full round-trip prediction.
@@ -3101,6 +3227,9 @@ class WorldTracker {
         }
         leftControllerLastLinVel = leftControllerLinVel
         rightControllerLastLinVel = rightControllerLinVel
+        if joyConsConnected && leftControllerPose == nil && rightControllerPose == nil {
+            handClack(handPoses.leftHand, handPoses.rightHand, headset: headsetZForwardForClack)
+        }
 
         // MARK: Hand poses/controller poses to ALVR motions
         if let leftHand = handPoses.leftHand {
@@ -3750,7 +3879,16 @@ final class ControllerFocus: ObservableObject {
         lastMetalFrame = CACurrentMediaTime()
     }
     private var lastInput = CACurrentMediaTime()
+    private var recoverUntil = 0.0
     private var silentPoses: [simd_float4x4?] = []
+
+    /// Shows the window for a few seconds whether or not the input looks lost, for controllers that
+    /// can't be judged (Joy-Cons).
+    func recover() {
+        recoverUntil = CACurrentMediaTime() + 3
+        print("ControllerFocus: recovering on request")
+        DispatchQueue.main.async { self.lost = true }
+    }
     private var movedWhileSilent = false
     private let timeout = 2.0
     private let moveDistance: Float = 0.02
@@ -3811,7 +3949,7 @@ final class ControllerFocus: ObservableObject {
                 }
             }
         }
-        let isLost = now - lastInput > timeout && movedWhileSilent
+        let isLost = (now - lastInput > timeout && movedWhileSilent) || now < recoverUntil
         if isLost != lost {
             DispatchQueue.main.async { self.lost = isLost }
         }
